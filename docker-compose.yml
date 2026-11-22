@@ -1,0 +1,70 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["15672:15672"] # management UI (guest/guest); metrics for Prometheus on :15692
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      retries: 20
+
+  catalog:
+    build: ./catalog
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      CATALOG_DB: /data/catalog.db
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    volumes: [catalog-data:/data]
+    depends_on: { rabbitmq: { condition: service_healthy } }
+
+  orders:
+    build: ./orders
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      CATALOG_URL: http://catalog:8000
+      ORDERS_DB: /data/orders.db
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    volumes: [orders-data:/data]
+    depends_on: { rabbitmq: { condition: service_healthy }, catalog: { condition: service_started } }
+
+  notifications:
+    build: ./notifications
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on: { rabbitmq: { condition: service_healthy } }
+
+  gateway:
+    build: ./gateway
+    ports: ["8080:3000"]
+    environment:
+      ORDERS_URL: http://orders:3000
+      CATALOG_URL: http://catalog:8000
+      NOTIFICATIONS_URL: http://notifications:8000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on: [orders, catalog, notifications]
+
+  # ---------------------------------------------------------------- observability
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0 # receives OTLP on 4318, UI on 16686
+    ports: ["16686:16686"]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes: [./observability/prometheus:/etc/prometheus:ro]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/microshop.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus, jaeger]
+
+volumes:
+  catalog-data:
+  orders-data:

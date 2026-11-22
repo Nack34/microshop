@@ -1,0 +1,66 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { service: [catalog, notifications] }
+    defaults: { run: { working-directory: "${{ matrix.service }}" } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt pytest httpx ruff
+      - run: ruff check .
+      - run: pytest -q
+
+  node:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { service: [orders, gateway] }
+    defaults: { run: { working-directory: "${{ matrix.service }}" } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prometheus config and alert-rule unit tests
+        run: |
+          docker run --rm -v "$PWD/observability/prometheus:/p" -w /p --entrypoint promtool prom/prometheus:v3.5.0 check config prometheus.yml
+          docker run --rm -v "$PWD/observability/prometheus:/p" -w /p --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts.test.yml
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install promql-parser pyyaml && python observability/check.py
+
+  e2e:
+    needs: [python, node, observability]
+    runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:3.13-management
+        ports: ["5672:5672", "15692:15692"]
+        options: --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: pip install -r catalog/requirements.txt promql-parser pyyaml
+      - run: (cd orders && npm ci) && (cd gateway && npm ci)
+      - run: ./e2e/run.sh
+
+  compose:
+    needs: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build

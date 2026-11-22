@@ -1,0 +1,72 @@
+# Unit tests for the alert rules: promtool test rules alerts.test.yml
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+
+tests:
+  - name: service down for a minute fires
+    interval: 1m
+    input_series:
+      - series: 'up{job="catalog"}'
+        values: "1 0 0 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: catalog }
+            exp_annotations: { summary: "catalog is not answering scrapes" }
+
+  - name: 10% errors for 5 minutes fires, 1% does not
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_count{job="orders",status_code="500"}'
+        values: "0+10x15"
+      - series: 'http_request_duration_seconds_count{job="orders",status_code="202"}'
+        values: "0+90x15"
+      - series: 'http_request_duration_seconds_count{job="gateway",status_code="502"}'
+        values: "0+1x15"
+      - series: 'http_request_duration_seconds_count{job="gateway",status_code="200"}'
+        values: "0+99x15"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, job: orders }
+            exp_annotations: { summary: "orders: 10% of requests fail" }
+
+  - name: orders created but never settled
+    interval: 1m
+    input_series:
+      - series: shop_orders_created_total
+        values: "0+1x20"
+      - series: 'shop_orders_settled_total{status="CONFIRMED"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: OrdersStuckPending
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "Orders are created but none were confirmed or rejected in 10 minutes" }
+
+  - name: healthy saga stays quiet
+    interval: 1m
+    input_series:
+      - series: shop_orders_created_total
+        values: "0+1x20"
+      - series: 'shop_orders_settled_total{status="CONFIRMED"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: OrdersStuckPending
+        exp_alerts: []
+
+  - name: low stock
+    interval: 1m
+    input_series:
+      - series: 'shop_product_stock{sku="MN-27"}'
+        values: "2"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: LowStock
+        exp_alerts:
+          - exp_labels: { severity: info, sku: MN-27 }
+            exp_annotations: { summary: "MN-27 has 2 units left" }
