@@ -1,8 +1,9 @@
 import asyncio
 
+from fastapi.testclient import TestClient
+
 from app import main
 from app.store import CatalogStore
-from fastapi.testclient import TestClient
 
 
 def test_reserve_is_all_or_nothing():

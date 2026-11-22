@@ -1,5 +1,6 @@
-from app import main
 from fastapi.testclient import TestClient
+
+from app import main
 
 
 def test_renders_each_event_once():
